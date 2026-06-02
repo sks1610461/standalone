@@ -1,0 +1,192 @@
+standalone:
+  global:
+    dnsService: "kube-dns"
+  loki:
+    storage:
+      type: s3
+      bucketNames:
+        chunks: dev-maino-loki-logs-v2
+        ruler: dev-maino-loki-logs-v2
+        admin: dev-maino-loki-logs-v2
+      s3:
+        region: ap-south-1
+        s3forcepathstyle: false
+    auth_enabled: false
+    commonConfig:
+      replication_factor: 1
+    schemaConfig:
+      configs:
+        - from: 2024-04-01
+          store: tsdb
+          object_store: s3
+          schema: v13
+          index:
+            prefix: loki_index_
+            period: 24h
+    ingester:
+      chunk_encoding: snappy
+      chunk_idle_period: 5m          # flush after 5min idle
+      chunk_retain_period: 1m        # retain 1min after flush
+      max_chunk_age: 10m             # force flush after 10min
+      flush_op_timeout: 10m          # timeout for flush
+      chunk_target_size: 1536000     # optimal 1.5MB chunk size
+    tracing:
+      enabled: true
+    querier:
+      max_concurrent: 2
+    limits_config:
+      # Ingestion limits
+      ingestion_rate_mb: 10
+      ingestion_burst_size_mb: 20
+      per_stream_rate_limit: 10MB
+      per_stream_rate_limit_burst: 20MB
+      # Retention
+      retention_period: 168h          # 7 days
+      # Query limits
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+      max_cache_freshness_per_query: 10m
+      split_queries_by_interval: 15m
+      max_entries_limit_per_query: 1000000
+      # Label limits
+      max_label_value_length: 20480
+      max_label_name_length: 10240
+      max_label_names_per_series: 300
+      cardinality_limit: 200000
+    compactor:
+      working_directory: /var/loki/compactor
+      compaction_interval: 10m
+      retention_enabled: true         # enable 7-day deletion
+      delete_request_store: s3        # use S3 for delete requests
+      retention_delete_delay: 2h      # delay before actual deletion
+      retention_delete_worker_count: 150
+  deploymentMode: SingleBinary
+  lokiCanary:
+    enabled: false
+  test:
+    enabled: false
+  singleBinary:
+    replicas: 1
+    resources:
+      limits:
+        cpu: "0.3"
+        memory: 1Gi
+      requests:
+        cpu: "0.2"
+        memory: 512Mi
+    persistence:
+      enabled: true
+      size: 2Gi
+    nodeSelector:
+      role: observability
+    serviceAccountName: loki-sa
+    extraEnv:
+      - name: GOMEMLIMIT
+        value: 850MiB
+  chunksCache:
+    writebackSizeLimit: 10MB
+    allocatedMemory: 250Mi
+  resultsCache:
+    allocatedMemory: 128Mi
+  minio:
+    enabled: false
+  backend:
+    replicas: 0
+  read:
+    replicas: 0
+  write:
+    replicas: 0
+  ingester:
+    replicas: 0
+  querier:
+    replicas: 0
+  queryFrontend:
+    replicas: 0
+  queryScheduler:
+    replicas: 0
+  distributor:
+    replicas: 0
+  compactor:
+    replicas: 0
+  indexGateway:
+    replicas: 0
+  bloomCompactor:
+    replicas: 0
+  bloomGateway:
+    replicas: 0
+
+fluentbit:
+  kind: DaemonSet
+  image:
+    repository: cr.fluentbit.io/fluent/fluent-bit
+    tag: 3.2.10
+    pullPolicy: IfNotPresent
+  serviceAccount:
+    create: true
+  rbac:
+    create: true
+  metricsPort: 2020
+  service:
+    type: ClusterIP
+  resources:
+    limits:
+      cpu: 100m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  tolerations:
+  - effect: NoExecute
+    operator: Exists
+  - effect: NoSchedule
+    operator: Exists
+  config:
+    service: |
+      [SERVICE]
+          Flush        1
+          Daemon       Off
+          Log_Level    info
+          Parsers_File parsers.conf
+          HTTP_Server  On
+          HTTP_Listen  0.0.0.0
+          HTTP_Port    2020
+    inputs: |
+      [INPUT]
+          Name             tail
+          Path             /var/log/containers/*.log
+          Parser           cri
+          Tag              kube.*
+          Refresh_Interval 5
+          Rotate_Wait      30
+          Mem_Buf_Limit    50MB
+          Skip_Long_Lines  On
+          DB               /var/log/flb_kube.db
+          Ignore_Older     4h
+          multiline.parser cri
+    filters: |
+      [FILTER]
+          Name                kubernetes
+          Match               kube.*
+          K8S-Logging.Parser  On
+          K8S-Logging.Exclude Off
+          Keep_Log            On
+          Merge_Log           On
+      [FILTER]
+          Name    grep
+          Match   kube.*
+          Exclude $kubernetes['namespace_name'] ^(kube-system|kube-public|kube-node-lease)$
+       [FILTER]
+          Name    modify
+          Match   kube.*
+          Copy    $kubernetes['labels']['maino_service'] maino_service
+          Copy    $kubernetes['labels']['maino_application_group'] maino_application_group
+          Copy    $kubernetes['labels']['maino_environment'] maino_environment
+    outputs: |
+      [OUTPUT]
+          Name              loki
+          Match             *
+          host              loki-gateway.logging.svc.cluster.local
+          port              80
+          drop_single_key   on
+          labels            namespace=$kubernetes['namespace_name'],container=$kubernetes['container_name'],maino_service=$kubernetes['labels']['maino_service'],maino_application_group=$kubernetes['labels']['maino_application_group'],maino_environment=$kubernetes['labels']['maino_environment'],cluster=maino
+          remove_keys       kubernetes
