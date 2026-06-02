@@ -1,0 +1,107 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: kube-node-additional-rules
+  namespace: monitoring
+spec:
+  groups:
+  - name: kube-node-additional-rules
+    rules:
+    # Node Not Healthy
+    - alert: KubernetesNodeNotReady
+      expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+      for: 5m
+      labels:
+        severity: critical
+        priority: P1
+        team: devops
+        resource: node
+        category: infra
+        service: kubernetes-node
+        env: dev
+      annotations:
+        summary: "Node not ready: {{ $labels.node }}"
+        description: "Node {{ $labels.node }} has been not ready for more than 5 minutes."
+
+    # Memory > 90%
+    - alert: HostMemoryUsageHigh
+      expr: |
+        (
+          node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes
+        ) / node_memory_MemTotal_bytes * 100 > 90
+      for: 5m
+      labels:
+        severity: critical
+        priority: P1
+        team: devops
+        resource: node
+        category: infra
+        service: kubernetes-node
+        env: dev
+      annotations:
+        summary: "High memory usage on {{ $labels.instance }}"
+        description: "Memory usage is above 90% on {{ $labels.instance }}"
+
+    # CPU > 90%
+    - alert: HostHighCpuLoad90
+      expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100) > 90
+      for: 5m
+      labels:
+        severity: critical
+        priority: P1
+        team: devops
+        resource: node
+        category: infra
+        service: kubernetes-node
+        env: dev
+      annotations:
+        summary: "High CPU load on {{ $labels.instance }}"
+        description: "CPU usage is above 90% on {{ $labels.instance }}"
+
+    # Low Ephemeral Storage (root fs)
+    - alert: NodeEphemeralStorageLow
+      expr: |
+        (
+          node_filesystem_avail_bytes{mountpoint="/", fstype!="tmpfs"}
+            /
+          node_filesystem_size_bytes{mountpoint="/", fstype!="tmpfs"}
+        ) * 100 < 10
+      for: 5m
+      labels:
+        severity: critical
+        priority: P2
+        team: devops
+        resource: node
+        category: infra
+        service: kubernetes-node
+        env: dev
+      annotations:
+        summary: "Low ephemeral storage on {{ $labels.instance }}"
+        description: "Ephemeral storage is below 10% on {{ $labels.instance }}"
+
+    # Kubernetes Ephemeral Storage via kubelet
+    - alert: KubernetesNodeEphemeralStorageLow
+      expr: |
+        kubelet_node_config_error > 0
+        or
+        (
+          kube_node_status_capacity{resource="ephemeral_storage"} > 0
+          and
+          (
+            kube_node_status_allocatable{resource="ephemeral_storage"}
+              /
+            kube_node_status_capacity{resource="ephemeral_storage"}
+          ) * 100 < 10
+        )
+      for: 5m
+      labels:
+        severity: critical
+        priority: P2
+        team: devops
+        resource: node
+        category: infra
+        service: kubernetes-node
+        env: dev
+      annotations:
+        summary: "Low ephemeral storage on node {{ $labels.node }}"
+        description: "Ephemeral storage is below 10% on node {{ $labels.node }}"
