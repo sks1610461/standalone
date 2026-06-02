@@ -1,0 +1,140 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: ec2-node-alerts
+  namespace: monitoring
+spec:
+  groups:
+  - name: ec2-cpu-alerts
+    rules:
+
+    - alert: EC2HighCPUWarning
+      expr: 100 - (avg by(instance, node) (rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100) > 80
+      for: 5m
+      labels:
+        severity: warning
+        priority: P3
+        team: devops
+        resource: ec2
+        category: infra
+        service: ec2-node
+        env: dev
+      annotations:
+        summary: "EC2 High CPU Warning on {{ $labels.instance }}"
+        description: "CPU usage >80% on {{ $labels.instance }}"
+
+    - alert: EC2HighCPUCritical
+      expr: 100 - (avg by(instance, node) (rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100) > 90
+      for: 5m
+      labels:
+        severity: critical
+        priority: P1
+        team: devops
+        resource: ec2
+        category: infra
+        service: ec2-node
+        env: dev
+      annotations:
+        summary: "EC2 Critical CPU on {{ $labels.instance }}"
+        description: "CPU usage >90% on {{ $labels.instance }}"
+
+    - alert: EC2HighCPUSteal
+      expr: avg by(instance) (rate(node_cpu_seconds_total{mode="steal"}[5m])) * 100 > 10
+      for: 5m
+      labels:
+        severity: warning
+        priority: P3
+        team: devops
+        resource: ec2
+        category: infra
+        service: ec2-node
+        env: dev
+      annotations:
+        summary: "EC2 High CPU Steal on {{ $labels.instance }}"
+        description: "CPU steal >10% on {{ $labels.instance }}"
+
+  - name: ec2-memory-alerts
+    rules:
+
+    - alert: EC2HighMemoryWarning
+      expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 80
+      for: 5m
+      labels:
+        severity: warning
+        priority: P3
+        team: devops
+        resource: ec2
+        category: infra
+        service: ec2-node
+        env: dev
+      annotations:
+        summary: "EC2 High Memory Warning on {{ $labels.instance }}"
+        description: "Memory usage >80% on {{ $labels.instance }}"
+
+    - alert: EC2HighMemoryCritical
+      expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 90
+      for: 5m
+      labels:
+        severity: critical
+        priority: P1
+        team: devops
+        resource: ec2
+        category: infra
+        service: ec2-node
+        env: dev
+      annotations:
+        summary: "EC2 Critical Memory on {{ $labels.instance }}"
+        description: "Memory usage >90% on {{ $labels.instance }}"
+
+    - alert: EC2OOMKillDetected
+      expr: increase(node_vmstat_oom_kill[5m]) > 0
+      labels:
+        severity: critical
+        priority: P1
+        team: devops
+        resource: ec2
+        category: infra
+        service: ec2-node
+        env: dev
+      annotations:
+        summary: "EC2 OOM Kill detected on {{ $labels.instance }}"
+        description: "OOM kill detected"
+
+  - name: ec2-storage-alerts
+    rules:
+
+    - alert: EC2DiskUsageWarning
+      expr: |
+        (node_filesystem_size_bytes{fstype!~"tmpfs|overlay|aufs|squashfs|devtmpfs"} -
+         node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|aufs|squashfs|devtmpfs"})
+        / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|aufs|squashfs|devtmpfs"} * 100 > 80
+      for: 5m
+      labels:
+        severity: warning
+        priority: P3
+        team: devops
+        resource: ec2
+        category: infra
+        service: ec2-node
+        env: dev
+      annotations:
+        summary: "EC2 Disk Usage Warning on {{ $labels.instance }}"
+        description: "Disk usage >80%"
+
+    - alert: EC2DiskUsageCritical
+      expr: |
+        (node_filesystem_size_bytes{fstype!~"tmpfs|overlay|aufs|squashfs|devtmpfs"} -
+         node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|aufs|squashfs|devtmpfs"})
+        / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|aufs|squashfs|devtmpfs"} * 100 > 90
+      for: 5m
+      labels:
+        severity: critical
+        priority: P2
+        team: devops
+        resource: ec2
+        category: infra
+        service: ec2-node
+        env: dev
+      annotations:
+        summary: "EC2 Disk Usage Critical on {{ $labels.instance }}"
+        description: "Disk usage >90%"
