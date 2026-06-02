@@ -1,0 +1,60 @@
+ubuntu@ip-10-10-1-97:~/o11y-standalone-setup/tempo$ cat values.yaml
+tempo:
+  enabled: true
+  fullnameOverride: tempo
+  nodeSelector:
+    role: observability
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClassName: gp3
+  resources:
+    requests:
+      cpu: "0.3"
+      memory: "100Mi"
+    limits:
+      cpu: "0.4"
+      memory: "150Mi"
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+  serviceAccount:
+    create: false
+    name: tempo
+  tempo:
+    retention: 168h              #  7 days (24 × 7 = 168h)
+    storage:
+      trace:
+        backend: s3
+        s3:
+          bucket: dev-maino-tempo-logs
+          endpoint: s3.ap-south-1.amazonaws.com
+          region: ap-south-1
+          insecure: false
+        wal:
+          path: /var/tempo/wal
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: "0.0.0.0:4317"
+          http:
+            endpoint: "0.0.0.0:4318"
+    metricsGenerator:
+      enabled: true
+      remoteWriteUrl: "http://vmsingle-vm.monitoring.svc:8429/api/v1/write"
+      storage:
+        path: /var/tempo/generator/wal
+      processors:
+        - service-graphs
+        - span-metrics
+    ingester:
+      max_block_duration: 5m
+    compactor:
+      compaction:
+        block_retention: 168h    #  7 days retention for blocks
