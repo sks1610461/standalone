@@ -1,0 +1,286 @@
+collector:
+  crds:
+    enabled: false
+  opentelemetry-operator:
+    enabled: false
+  collectors:
+    daemon:
+      enabled: false
+    otel:
+      mode: deployment
+      suffix: "otel"
+      enabled: true
+      replicas: 1
+      nodeSelector:
+        role: observability
+      image:
+        repository: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib
+        tag: "0.140.1"
+      resources:
+        limits:
+          cpu: 1
+          memory: 1Gi
+        requests:
+          cpu: 500m
+          memory: 1Gi
+
+      config:
+        extensions:
+          health_check:
+            endpoint: 0.0.0.0:13133
+
+        connectors:
+          servicegraph:
+            latency_histogram_buckets: [100ms, 250ms, 1s, 5s, 10s]
+            dimensions:
+              - http.method
+              - http.target
+            store:
+              max_items: 500
+              ttl: 5s
+            virtual_node_extra_label: true
+            virtual_node_peer_attributes:
+              - db.name
+              - db.system
+              - messaging.system
+              - peer.service
+          spanmetrics:
+            histogram:
+              explicit:
+                buckets: [100ms, 250ms, 500ms, 1s, 5s, 10s]
+            dimensions:
+              - name: rpc.grpc.status_code
+              - name: rpc.service
+              - name: rpc.system
+              - name: rpc.method
+              - name: http.method
+              - name: http.status_code
+              - name: http.response.status_code
+              - default: /
+                name: http.route
+              - default: UNKNOWN
+                name: BU
+              #- name: category
+              #- name: environment
+              #- name: service
+              - name: technology
+              - name: maino_environment
+              - name: maino_service
+              - name: maino_application_group
+            dimensions_cache_size: 1000
+            events:
+              dimensions:
+                - name: exception.type
+                - name: exception.message
+              enabled: false
+            exemplars:
+              enabled: true
+            metrics_expiration: 5m
+            metrics_flush_interval: 15s
+
+        exporters:
+          debug:
+            verbosity: basic
+          otlp:
+            endpoint: tempo.observability.svc.cluster.local:4317
+            tls:
+              insecure: true
+            sending_queue:
+              enabled: true
+              num_consumers: 10
+              queue_size: 5000
+            retry_on_failure:
+              enabled: true
+            compression: snappy
+            timeout: 30s
+          prometheusremotewrite:
+            endpoint: "http://vmsingle-vm.monitoring.svc:8429/api/v1/write"
+            max_batch_size_bytes: 3000000
+            remote_write_queue:
+              enabled: true
+              queue_size: 100000
+            retry_on_failure:
+              enabled: true
+              initial_interval: 5s
+              max_elapsed_time: 300s
+              max_interval: 30s
+            timeout: 300s
+            tls:
+              insecure_skip_verify: true
+          otlphttp:
+            endpoint: "http://loki-gateway.logging.svc.cluster.local/otlp"
+
+        processors:
+          memory_limiter:
+            check_interval: 5s
+            limit_percentage: 90
+            spike_limit_percentage: 20
+          tail_sampling:
+            decision_wait: 120s
+            policies:
+              # Always keep errors
+              - name: error-policy
+                type: status_code
+                status_code:
+                  status_codes: [ERROR]
+
+              # Always keep slow requests > 500ms
+              - name: latency-policy
+                type: latency
+                latency:
+                  threshold_ms: 500
+
+              # Always keep Java backend services 100%
+              - name: java-services-policy
+                type: string_attribute
+                string_attribute:
+                  key: service.name
+                  values:
+                    - google-ads-insights-dev
+                    - meta-ads-insights-dev
+                    - linkedin-ads-manager-dev
+
+              # Keep 50% of everything else
+              - name: probabilistic
+                type: probabilistic
+                probabilistic:
+                  sampling_percentage: 50
+          batch:
+            send_batch_max_size: 0
+            send_batch_size: 3000000
+            timeout: 15s
+          batch/tempo:
+            send_batch_max_size: 128
+            send_batch_size: 64
+            timeout: 1s
+          attributes:
+            actions:
+              - action: extract
+                key: http.url
+                pattern: ^(?P<domain>https?://[^/]+)(?P<base_path>(?:/[^/?\.]+)+)(?:/[^/?]+\.[a-zA-Z0-9]+)?(?:\?.*)?$
+          attributes/metrics:
+            actions:
+              - action: extract
+                key: span.name
+                pattern: ^(?P<temp_url>[A-Z]+\s+\/[^? ]*)
+          transform:
+            trace_statements:
+              - set(span.name, span.attributes["base_path"])
+              - replace_pattern(span.attributes["http.route"], "[a-zA-Z0-9\\-]{8,}(\\?\\=/|$)", ":id")
+              - keep_keys(resource.attributes, ["service.name", "service.namespace", "process.command", "k8s.namespace.name", "environment", "service", "technology", "category"])
+          transform/metrics:
+            metric_statements:
+              - context: datapoint
+                statements:
+                  - set(attributes["http.status_code"], attributes["http.response.status_code"])
+                  - set(attributes["http.method"], attributes["http.request.method"])
+                  - set(attributes["span.name"], attributes["temp_url"])
+                  - replace_pattern(attributes["span.name"], "[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}", "{:UUID}")
+                  - replace_pattern(attributes["span.name"], "[^/]+?\\.(gif|webp|js|css|png|jpg|jpeg|svg|ico|woff2?|ttf|map)$", "")
+                  - delete_key(attributes, "temp_url")
+                  - delete_key(attributes, "instance")
+                  - delete_key(attributes, "http.request.method")
+                  - delete_key(attributes, "http.response.status_code")
+          k8sattributes/span:
+            auth_type: serviceAccount
+            passthrough: false
+            extract:
+              metadata:
+                - k8s.namespace.name
+                - k8s.pod.name
+                - k8s.deployment.name
+              labels:
+                - tag_name: category
+                  key: category
+                  from: pod
+               # - tag_name: environment
+                #  key: environment
+                 # from: pod
+                #- tag_name: service
+                 # key: service
+                  #from: pod
+                - tag_name: technology
+                  key: technology
+                  from: pod
+                - tag_name: maino_environment
+                  key: maino_environment
+                  from: pod
+                - tag_name: maino_service
+                  key: maino_service
+                  from: pod
+                - tag_name: maino_application_group
+                  key: maino_application_group
+                  from: pod
+
+            pod_association:
+              - sources:
+                  - from: resource_attribute
+                    name: k8s.pod.name
+                  - from: resource_attribute
+                    name: k8s.deployment.name
+
+        receivers:
+          otlp:
+            protocols:
+              grpc:
+                endpoint: 0.0.0.0:4317
+              http:
+                endpoint: 0.0.0.0:4318
+          prometheus:
+            config:
+              scrape_configs:
+                - job_name: app-otelcol-metrics
+                  scrape_interval: 10s
+                  static_configs:
+                    - targets: [127.0.0.1:8889]
+
+        service:
+          extensions: [health_check]
+          pipelines:
+            traces:
+              exporters:
+                - otlp
+                - spanmetrics
+                - servicegraph
+                - debug
+              processors:
+                - memory_limiter
+                - tail_sampling
+                - k8sattributes/span
+                - batch/tempo
+              receivers:
+                - otlp
+            metrics:
+              exporters:
+                - prometheusremotewrite
+              processors:
+                - memory_limiter
+                - attributes/metrics
+                - transform/metrics
+                - attributes
+                - batch
+              receivers:
+                - otlp
+                - prometheus
+                - spanmetrics
+                - servicegraph
+            logs:
+              exporters:
+                - otlphttp
+              processors:
+                - memory_limiter
+                - batch
+              receivers:
+                - otlp
+          telemetry:
+            metrics:
+              level: detailed
+              readers:
+                - pull:
+                    exporter:
+                      prometheus:
+                        host: 127.0.0.1
+                        port: 8889
+
+  instrumentation:
+    enabled: false
