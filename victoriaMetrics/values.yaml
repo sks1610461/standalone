@@ -1,0 +1,130 @@
+vm:
+  victoria-metrics-operator:
+    enabled: true
+    hostNetwork: true
+    operator:
+      disable_prometheus_converter: true
+  prometheus-node-exporter:
+    enabled: true
+  defaultDashboards:
+    enabled: true
+  kubeStateMetrics:
+    enabled: true
+  kube-state-metrics:
+    resources:
+      limits:
+        cpu: 0.5
+        memory: 0.5Gi
+      requests:
+        cpu: 0.5
+        memory: 0.5Gi
+    extraArgs:
+      - "--metric-labels-allowlist=pods=[*],nodes=[*],namespaces=[*]"
+    nodeSelector:
+      role: observability
+    tolerations:
+      - key: team
+        operator: Equal
+        value: "o11y"
+        effect: NoSchedule
+  grafana:
+    enabled: false
+  alertmanager:
+    enabled: true
+    spec:
+      replicaCount: 1
+      extraEnvs:
+        - name: TZ
+          value: Asia/Kolkata
+      nodeSelector:
+        role: observability
+      tolerations:
+        - key: team
+          operator: Equal
+          value: "o11y"
+          effect: NoSchedule
+      resources:
+        requests:
+          cpu: "0.1"
+          memory: 128Mi
+        limits:
+          cpu: "0.2"
+          memory: 256Mi
+    useManagedConfig: true
+    config:
+      route:
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+        receiver: slack-dev
+        group_by:
+          - alertname
+          - severity
+          - namespace
+        routes:
+          - matchers:
+              - severity = "critical"
+            receiver: slack-dev
+            continue: false
+          - matchers:
+              - severity = "warning"
+            receiver: slack-dev
+            continue: false
+      receivers:
+        - name: slack-dev
+          slack_configs:
+            - api_url:
+                name: slack-webhook-secret
+                key: api_url
+              channel: '#all-observability'
+              send_resolved: true
+              icon_emoji: '{{ if eq .Status "firing" }}:red_circle:{{ else }}:large_green_circle:{{ end }}'
+              title: '{{ if eq .Status "firing" }}:red_circle: *DevOps Alert: {{ .CommonLabels.alertname }}*{{ else }}:large_green_circle: *DevOps Alert: {{ .CommonLabels.alertname }}*{{ end }}'
+              text: "{{ range .Alerts }}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n*Status*      : {{ if eq .Status \"firing\" }}FIRING 🔴{{ else }}RESOLVED ✅{{ end }}\n*Priority*    : {{ if .Labels.priority }}{{ .Labels.priority }}{{ else }}P3{{ end }}\n*Alert*       : {{ .Labels.alertname }}\n*Severity*    : {{ .Labels.severity | toUpper }}\n*Instance*    : {{ .Labels.instance }}\n*Namespace*   : {{ .Labels.namespace }}\n*Environment* : dev\n*Triggered*   : {{ .StartsAt.Local.Format \"Jan 02, 2006, 03:04 PM\" }} IST\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n*Description* : {{ .Annotations.description }}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n{{ end }}"
+  vmsingle:
+    enabled: true
+    spec:
+      retentionPeriod: "14d"
+      extraArgs:
+        search.maxUniqueTimeseries: "1000000"
+        maxLabelsPerTimeseries: "60"
+      storage:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+  defaultRules:
+    create: false
+  vmcluster:
+    enabled: false
+  vmagent:
+    enabled: true
+    spec:
+      extraArgs:
+        promscrape.maxScrapeSize: 200MB
+        promscrape.streamParse: "true"
+        promscrape.dropOriginalLabels: "false"
+        remoteWrite.label: cluster=maino,env=dev
+      resources:
+        limits:
+          cpu: "0.3"
+          memory: 300Mi
+        requests:
+          cpu: "0.2"
+          memory: 300Mi
+      scrapeInterval: 30s
+  vmalert:
+    enabled: true
+    spec:
+      resources:
+        limits:
+          cpu: "0.3"
+          memory: 500Mi
+        requests:
+          cpu: "0.2"
+          memory: 300Mi
+      notifiers:
+        - url: "http://vmalertmanager-vm.monitoring.svc.cluster.local:9093"
+nodeSelector:
+  role: observability
