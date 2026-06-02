@@ -1,0 +1,112 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: pod-alerts
+  namespace: monitoring
+spec:
+  groups:
+    - name: pod-health
+      rules:
+
+        # ── Pending Pod ────────────────────────────────────────────────
+        - alert: PodPending
+          expr: |
+            kube_pod_status_phase{phase="Pending"} == 1
+          for: 5m
+          labels:
+            severity: warning
+            priority: P3
+            team: devops
+            resource: pod
+            category: infra
+            service: kubernetes-pod
+            env: dev
+          annotations:
+            summary: "Pod Pending on {{ $labels.namespace }}/{{ $labels.pod }}"
+            description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been in Pending state for more than 5 minutes."
+
+        # ── CrashLoopBackOff ───────────────────────────────────────────
+        - alert: PodCrashLoopBackOff
+          expr: |
+            increase(kube_pod_container_status_restarts_total[15m]) > 3
+          for: 2m
+          labels:
+            severity: critical
+            priority: P1
+            team: devops
+            resource: pod
+            category: infra
+            service: kubernetes-pod
+            env: dev
+          annotations:
+            summary: "Pod CrashLoopBackOff on {{ $labels.namespace }}/{{ $labels.pod }}"
+            description: "Container {{ $labels.container }} in pod {{ $labels.pod }} (namespace: {{ $labels.namespace }}) has restarted more than 3 times in 15 minutes- CrashLoopBackOff detected."
+
+        # ── Init Container Not Completing ──────────────────────────────
+        - alert: PodInitContainerFailing
+          expr: |
+            kube_pod_init_container_status_waiting_reason{reason=~"CrashLoopBackOff|Error|OOMKilled"} == 1
+          for: 5m
+          labels:
+            severity: warning
+            priority: P2
+            team: devops
+            resource: pod
+            category: infra
+            service: kubernetes-pod
+            env: dev
+          annotations:
+            summary: "Pod Init Container Failing on {{ $labels.namespace }}/{{ $labels.pod }}"
+            description: "Init container {{ $labels.container }} in pod {{ $labels.pod }} (namespace: {{ $labels.namespace }}) is stuck with reason: {{ $labels.reason }}."
+
+        # ── Evicted Pod ────────────────────────────────────────────────
+        - alert: PodEvicted
+          expr: |
+            kube_pod_status_reason{reason="Evicted"} == 1
+          for: 1m
+          labels:
+            severity: critical
+            priority: P1
+            team: devops
+            resource: pod
+            category: infra
+            service: kubernetes-pod
+            env: dev
+          annotations:
+            summary: "Pod Evicted on {{ $labels.namespace }}/{{ $labels.pod }}"
+            description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been Evicted. Likely due to node memory or disk pressure."
+
+        # ── ContainerStatusUnknown ─────────────────────────────────────
+        - alert: PodContainerStatusUnknown
+          expr: |
+            kube_pod_container_status_waiting_reason{reason="ContainerStatusUnknown"} == 1
+          for: 5m
+          labels:
+            severity: critical
+            priority: P2
+            team: devops
+            resource: pod
+            category: infra
+            service: kubernetes-pod
+            env: dev
+          annotations:
+            summary: "Container Status Unknown on {{ $labels.namespace }}/{{ $labels.pod }}"
+            description: "Container {{ $labels.container }} in pod {{ $labels.pod }} (namespace: {{ $labels.namespace }}) has Unknown status. Node may be having issues."
+
+
+
+        # ── Pod Restarted ──────────────────────────────────────────────
+        - alert: PodRestarted
+          expr: |
+            increase(kube_pod_container_status_restarts_total[5m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+            team: devops
+            resource: pod
+            category: pod
+            service: "{{ $labels.pod }}"
+            env: prod
+          annotations:
+            summary: "Pod Restarted on {{ $labels.namespace }}/{{ $labels.pod }}"
+            description: "Container {{ $labels.container }} in pod {{ $labels.pod }} (namespace: {{ $labels.namespace }}) has restarted. Total restarts: {{ $value }}."
